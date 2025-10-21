@@ -6,7 +6,7 @@ const app = express();
 const port = 3000;
 
 // 🔒 TRAG HIER DEINEN ECHTEN DISCORD-WEBHOOK EIN (am besten später aus .env laden)
-const DISCORD_WEBHOOK_URL = 'https://discordapp.com/api/webhooks/1430273248641421333/uQKaH8GDfiTLE8eD1FjY98mIAhme8JgM-lmgj3T4TiaYUQygnNHZZqFat6n8d32tPb56';
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 app.use(express.json());
 
@@ -94,3 +94,4 @@ app.get('/track', async (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Server running at http://localhost:${port}`);
 });
+
