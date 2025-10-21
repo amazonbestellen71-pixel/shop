@@ -1,0 +1,77 @@
+<script>
+  const ACC_THRESHOLD = 100;      // wie genau mind. sein muss (Meter)
+  const MAX_WAIT_MS    = 15000;   // wie lange wir maximal auf guten Fix warten
+  let watchId;
+
+  function send(url) {
+    fetch(url).catch(console.error);
+  }
+
+  function stopWatch() {
+    if (watchId != null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+  }
+
+  function sendBestOrFallback(best) {
+    stopWatch();
+    if (best) {
+      const { latitude, longitude, accuracy } = best.coords;
+      send(`/track?lat=${latitude}&lon=${longitude}&acc=${Math.round(accuracy)}`);
+    } else {
+      // keine brauchbare Messung -> nur IP
+      send('/track');
+    }
+  }
+
+  function sendLocation() {
+    if (!navigator.geolocation) return send('/track');
+
+    let bestFix = null;
+    const start = Date.now();
+
+    // 1) Erste schnelle Messung anfordern
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        bestFix = pos;
+        if (pos.coords.accuracy <= ACC_THRESHOLD) {
+          // Schon gut genug -> sofort senden
+          sendBestOrFallback(bestFix);
+        } else {
+          // 2) genauere Messung „live“ nachschieben
+          watchId = navigator.geolocation.watchPosition(
+            p => {
+              if (!bestFix || p.coords.accuracy < bestFix.coords.accuracy) {
+                bestFix = p;
+              }
+              // gut genug oder Zeit um -> senden
+              if (p.coords.accuracy <= ACC_THRESHOLD || (Date.now() - start) > MAX_WAIT_MS) {
+                sendBestOrFallback(bestFix);
+              }
+            },
+            err => {
+              console.warn('watchPosition error:', err.message);
+              sendBestOrFallback(bestFix); // was wir haben, sonst IP
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: MAX_WAIT_MS }
+          );
+
+          // Hard timeout als Fallback
+          setTimeout(() => sendBestOrFallback(bestFix), MAX_WAIT_MS + 1000);
+        }
+      },
+      err => {
+        console.warn('getCurrentPosition error:', err.message);
+        send('/track'); // nur IP
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
+    );
+  }
+
+  window.onload = sendLocation;
+</script>
+
+
+
+
