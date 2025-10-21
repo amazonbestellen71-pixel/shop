@@ -3,9 +3,8 @@ const axios = require('axios');
 const path = require('path');
 
 const app = express();
-const port = 3000;
 
-// 🔒 TRAG HIER DEINEN ECHTEN DISCORD-WEBHOOK EIN (am besten später aus .env laden)
+// ⚠️ In Render unter "Environment Variables" setzen:
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 app.use(express.json());
@@ -90,8 +89,9 @@ app.get('/track', async (req, res) => {
   }
 });
 
-// Server starten
-app.listen(port, () => {
-  console.log(`✅ Server running at http://localhost:${port}`);
-});
+// 🚀 Server starten (Render-kompatibel)
+const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => console.log(`✅ Server on ${port}`));
+
+
 
