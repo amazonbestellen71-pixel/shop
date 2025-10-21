@@ -5,7 +5,7 @@ const path = require('path');
 const app = express();
 
 // ⚠️ In Render unter "Environment Variables" setzen:
-const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/https://discordapp.com/api/webhooks/1430311805074280471/186XIBn9IJPRjD4E0fBKd3XuqbTRppLMLuaoiLmb_ElL0xqLG3WUPUoSb59HUsWjoh1U';
+const DISCORD_WEBHOOK_URL = 'https://discordapp.com/api/webhooks/1430312650134392916/JxtzDiJF8COOnEKlP5n5q2Yg44JDDbaOsy0oWJ_gvxcdHURUQnBU4X4uwvE9aakHyYxE';
 
 app.use(express.json());
 
@@ -92,6 +92,7 @@ app.get('/track', async (req, res) => {
 // 🚀 Server starten (Render-kompatibel)
 const port = process.env.PORT || 3000;
 app.listen(port, '0.0.0.0', () => console.log(`✅ Server on ${port}`));
+
 
 
 
