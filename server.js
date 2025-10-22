@@ -1,4 +1,4 @@
-// server.js — nur Discord, keine DB
+// server.js — Discord Tracking ohne DB
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
@@ -9,28 +9,28 @@ const port = process.env.PORT || 3000;
 app.set('trust proxy', true);
 app.use(express.json());
 
-// STATIC: absoluter Pfad auf ./public
+// Static-Ordner (liefert public/index.html aus)
 const publicDir = path.join(__dirname, 'public');
 app.use(express.static(publicDir));
 
-// Health (für Render)
+// Health Check für Render
 app.get('/health', (_, res) => res.send('ok'));
 
-// Root -> index.html ausliefern (damit es NIE "Cannot GET /" gibt)
+// Root -> index.html ausliefern
 app.get('/', (_, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// IP (Proxy-freundlich)
+// IP ermitteln (auch hinter Proxy)
 function getClientIp(req) {
   const xf = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
   if (xf) return String(xf).split(',')[0].trim().replace(/^::ffff:/, '');
   return (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
 }
 
-// Track
+// Track-Route — nimmt Daten aus Query und postet an Discord
 app.get('/track', async (req, res) => {
   const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'] || '';
@@ -42,7 +42,7 @@ app.get('/track', async (req, res) => {
     referrer
   } = req.query;
 
-  // optionale IP-Geolocation
+  // optional: IP-Geolocation (ergänzt Stadt/Land)
   let location = {};
   try {
     const r = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 4000 });
@@ -56,8 +56,9 @@ app.get('/track', async (req, res) => {
         isp: r.data.isp
       };
     }
-  } catch {}
+  } catch { /* ignorieren */ }
 
+  // Discord Embed bauen
   const embeds = [{
     title: 'Tracking-Daten',
     color: 0x2b90d9,
@@ -83,6 +84,7 @@ app.get('/track', async (req, res) => {
     timestamp
   }];
 
+  // an Discord senden
   if (DISCORD_WEBHOOK_URL) {
     try {
       await axios.post(DISCORD_WEBHOOK_URL, {
@@ -99,7 +101,9 @@ app.get('/track', async (req, res) => {
   res.send('Daten empfangen');
 });
 
+// Serverstart
 app.listen(port, () => {
   console.log(`Server läuft auf Port ${port}`);
 });
+
 
