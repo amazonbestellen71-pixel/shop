@@ -15,10 +15,21 @@
   <div id="status">Sammle Daten…</div>
 
   <script>
-    function collectData() {
-      const data = {
+    async function getGeoPermission() {
+      try {
+        if (!navigator.permissions) return 'unbekannt';
+        const s = await navigator.permissions.query({ name: 'geolocation' });
+        return s.state; // 'granted' | 'denied' | 'prompt'
+      } catch { return 'unbekannt'; }
+    }
+
+    function collectData(geoStatus) {
+      return {
+        request_id: (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
         lat: null,
         lon: null,
+        accuracy: null,
+        geo_status: geoStatus || 'unbekannt',
         userAgent: navigator.userAgent || '',
         language: navigator.language || '',
         languages: JSON.stringify(navigator.languages || []),
@@ -44,34 +55,47 @@
         referrer: document.referrer || '',
         timestamp: new Date().toISOString()
       };
+    }
 
-      const send = () => {
-        const qs = new URLSearchParams(data).toString();
-        fetch(`/track?${qs}`)
-          .then(() => {
-            const s = document.getElementById('status');
-            s.textContent = '✅ Daten wurden an den Server gesendet.';
-            s.className = 'ok';
-          })
-          .catch(err => {
-            console.error(err);
-            const s = document.getElementById('status');
-            s.textContent = '❌ Senden fehlgeschlagen.';
-            s.className = 'err';
-          });
+    function sendData(data) {
+      const qs = new URLSearchParams(data).toString();
+      return fetch(`/track?${qs}`);
+    }
+
+    (async function run(){
+      const geoStatus = await getGeoPermission();
+      const data = collectData(geoStatus);
+
+      const done = () => {
+        const s = document.getElementById('status');
+        s.textContent = '✅ Daten wurden an den Server gesendet.';
+        s.className = 'ok';
+      };
+      const fail = (err) => {
+        console.error(err);
+        const s = document.getElementById('status');
+        s.textContent = '❌ Senden fehlgeschlagen.';
+        s.className = 'err';
       };
 
+      // Nur echte Browser-GPS nutzen (keine IP-Fallbacks)
       if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
-          pos => { data.lat = pos.coords.latitude; data.lon = pos.coords.longitude; send(); },
-          () => send(),
+          pos => {
+            data.lat = pos.coords.latitude;
+            data.lon = pos.coords.longitude;
+            if (typeof pos.coords.accuracy === 'number') data.accuracy = pos.coords.accuracy;
+            sendData(data).then(done).catch(fail);
+          },
+          () => { // verweigert/Fehler -> ohne Location senden
+            sendData(data).then(done).catch(fail);
+          },
           { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
         );
       } else {
-        send();
+        sendData(data).then(done).catch(fail);
       }
-    }
-    window.onload = collectData;
+    })();
   </script>
 </body>
 </html>
